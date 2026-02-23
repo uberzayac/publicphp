@@ -1,10 +1,16 @@
 <?php
 require_once (__DIR__.'/crest.php');
-// Получаем и декодируем параметры размещения (от Битрикс24)
-$placement_options = json_decode($_REQUEST['PLACEMENT_OPTIONS'], true);
-$dealId = $placement_options['ID']; // ID текущей сделки
 
-// Формируем URL калькулятора с параметрами
+// Разрешаем CORS
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type');
+
+// Получаем и декодируем параметры размещения
+$placement_options = json_decode($_REQUEST['PLACEMENT_OPTIONS'] ?? '{}', true);
+$dealId = $placement_options['ID'] ?? '';
+
+// Формируем URL калькулятора
 $calculatorUrl = "https://publicfork.vercel.app/?deal_id=" . urlencode($dealId);
 ?>
 <!DOCTYPE html>
@@ -14,7 +20,6 @@ $calculatorUrl = "https://publicfork.vercel.app/?deal_id=" . urlencode($dealId);
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Калькулятор листовок</title>
     <style>
-        /* Сбрасываем все отступы и скроллы */
         * {
             margin: 0;
             padding: 0;
@@ -24,11 +29,10 @@ $calculatorUrl = "https://publicfork.vercel.app/?deal_id=" . urlencode($dealId);
         html, body {
             width: 100%;
             height: 100%;
-            overflow: hidden; /* Убираем скроллы у страницы */
+            overflow: hidden;
             background: #f5f5f5;
         }
         
-        /* Контейнер на всю высоту */
         .fullscreen {
             position: fixed;
             top: 0;
@@ -37,11 +41,10 @@ $calculatorUrl = "https://publicfork.vercel.app/?deal_id=" . urlencode($dealId);
             bottom: 0;
             width: 100%;
             height: 100%;
-            overflow: hidden;
+            overflow: auto; /* Скролл только если нужно */
             background: white;
         }
         
-        /* Стили для загрузки */
         .loading {
             position: fixed;
             top: 0;
@@ -54,11 +57,19 @@ $calculatorUrl = "https://publicfork.vercel.app/?deal_id=" . urlencode($dealId);
             background: white;
             z-index: 1000;
             font-family: Arial, sans-serif;
-            color: #666;
         }
         
         .loading.hidden {
             display: none;
+        }
+        
+        .loading-content {
+            display: flex;
+            align-items: center;
+            background: white;
+            padding: 20px 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
         
         .spinner {
@@ -76,18 +87,27 @@ $calculatorUrl = "https://publicfork.vercel.app/?deal_id=" . urlencode($dealId);
             100% { transform: rotate(360deg); }
         }
         
-        .loading-content {
-            display: flex;
-            align-items: center;
-            background: white;
-            padding: 20px 30px;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        .error {
+            color: #d32f2f;
+            text-align: center;
+        }
+        
+        .error button {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .error button:hover {
+            background: #1976D2;
         }
     </style>
 </head>
 <body>
-    <!-- Индикатор загрузки -->
     <div id="loading" class="loading">
         <div class="loading-content">
             <div class="spinner"></div>
@@ -95,78 +115,113 @@ $calculatorUrl = "https://publicfork.vercel.app/?deal_id=" . urlencode($dealId);
         </div>
     </div>
 
-    <!-- Контейнер для калькулятора -->
     <div id="calculatorContainer" class="fullscreen" style="display: none;"></div>
 
     <script>
-        // Получаем ID сделки из PHP
         const dealId = '<?= $dealId ?>';
         const calculatorUrl = '<?= $calculatorUrl ?>';
-        
-        // Функция загрузки калькулятора
+        const loadingEl = document.getElementById('loading');
+        const containerEl = document.getElementById('calculatorContainer');
+
+        // Функция загрузки стилей и скриптов
+        function loadResources(doc) {
+            // Копируем стили
+            const styles = doc.querySelectorAll('style, link[rel="stylesheet"]');
+            styles.forEach(style => {
+                document.head.appendChild(style.cloneNode(true));
+            });
+
+            // Копируем скрипты (кроме тех, что уже загружены)
+            const scripts = doc.querySelectorAll('script[src]');
+            scripts.forEach(oldScript => {
+                if (!document.querySelector(`script[src="${oldScript.src}"]`)) {
+                    const newScript = document.createElement('script');
+                    newScript.src = oldScript.src;
+                    newScript.async = false;
+                    document.body.appendChild(newScript);
+                }
+            });
+        }
+
         async function loadCalculator() {
             try {
                 // Загружаем HTML калькулятора
                 const response = await fetch(calculatorUrl);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
                 const html = await response.text();
                 
-                // Создаем временный контейнер
-                const temp = document.createElement('div');
-                temp.innerHTML = html;
+                // Парсим HTML
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
                 
-                // Извлекаем только содержимое body (без оберток)
-                const bodyContent = temp.querySelector('body').innerHTML;
+                // Проверяем, что получили валидный HTML
+                if (!doc || !doc.body) {
+                    throw new Error('Не удалось распарсить HTML калькулятора');
+                }
                 
-                // Вставляем в наш контейнер
-                document.getElementById('calculatorContainer').innerHTML = bodyContent;
+                // Получаем содержимое body
+                let bodyContent = doc.body.innerHTML;
                 
-                // Копируем все стили из head
-                const styles = temp.querySelectorAll('style, link[rel="stylesheet"]');
-                styles.forEach(style => {
-                    document.head.appendChild(style.cloneNode(true));
-                });
+                // Исправляем пути к ресурсам
+                // 1. Логотип — переносим из корня publicfork в нашу папку
+                bodyContent = bodyContent.replace(
+                    'src="logo_new_rgb75.png"', 
+                    'src="https://publicfork.vercel.app/logo_new_rgb75.png"'
+                );
                 
-                // Копируем все скрипты
-                const scripts = temp.querySelectorAll('script');
-                scripts.forEach(oldScript => {
-                    const newScript = document.createElement('script');
-                    
-                    // Копируем атрибуты
-                    Array.from(oldScript.attributes).forEach(attr => {
-                        newScript.setAttribute(attr.name, attr.value);
-                    });
-                    
-                    // Копируем содержимое для inline-скриптов
-                    if (oldScript.src) {
-                        newScript.src = oldScript.src;
-                    } else {
-                        newScript.textContent = oldScript.textContent;
-                    }
-                    
-                    document.body.appendChild(newScript);
-                });
+                // 2. Все остальные относительные пути
+                bodyContent = bodyContent.replace(
+                    /src="(?!https?:\/\/)([^"]+)"/g, 
+                    'src="https://publicfork.vercel.app/$1"'
+                );
                 
-                // Прячем загрузку и показываем калькулятор
-                document.getElementById('loading').classList.add('hidden');
-                document.getElementById('calculatorContainer').style.display = 'block';
+                bodyContent = bodyContent.replace(
+                    /href="(?!https?:\/\/)([^"]+)"/g, 
+                    'href="https://publicfork.vercel.app/$1"'
+                );
                 
-                // Сообщаем Битрикс24 о необходимости подогнать высоту
+                // Вставляем контент
+                containerEl.innerHTML = bodyContent;
+                
+                // Загружаем ресурсы
+                loadResources(doc);
+                
+                // Прячем загрузку
+                loadingEl.classList.add('hidden');
+                containerEl.style.display = 'block';
+                
+                // Сообщаем Битрикс24 о загрузке
                 if (typeof BX24 !== 'undefined') {
-                    BX24.init(function() {
-                        BX24.resizeWindow();
-                    });
+                    try {
+                        BX24.init(function() {
+                            BX24.resizeWindow();
+                        });
+                    } catch (e) {
+                        console.warn('BX24 resize error:', e);
+                    }
                 }
                 
             } catch (error) {
                 console.error('Ошибка загрузки калькулятора:', error);
-                document.getElementById('loading').innerHTML = `
-                    <div class="loading-content" style="color: #d32f2f;">
-                        <span>Ошибка загрузки калькулятора. <button onclick="location.reload()">Повторить</button></span>
+                
+                loadingEl.innerHTML = `
+                    <div class="loading-content error">
+                        <div style="text-align: center;">
+                            <div style="font-size: 48px; margin-bottom: 10px;">❌</div>
+                            <div style="margin-bottom: 10px;">Ошибка загрузки калькулятора</div>
+                            <div style="font-size: 12px; color: #666; margin-bottom: 15px;">${error.message}</div>
+                            <button onclick="location.reload()">Повторить</button>
+                            <button onclick="window.open('${calculatorUrl}', '_blank')" style="margin-left: 10px; background: #4CAF50;">Открыть напрямую</button>
+                        </div>
                     </div>
                 `;
             }
         }
-        
+
         // Запускаем загрузку
         loadCalculator();
     </script>
